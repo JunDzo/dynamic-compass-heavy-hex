@@ -1,9 +1,9 @@
-import _heavy_hex as hh
+import heavyhex._heavy_hex as hh
 import gen
 from collections import defaultdict
 
 
-d = 2
+d=3
 rounds = 2
 # Global dictionary to store all square tables by step
 
@@ -41,7 +41,8 @@ for step in range(rounds):
         table[step % 2]
     )
     if step == 0:
-        detector.init_x_detectors()
+        a=detector.init_x_detectors()
+        print(a)
     else:
         detector.detector_generator()
     
