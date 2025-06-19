@@ -1,10 +1,11 @@
-import heavyhex._heavy_hex as hh
+import _heavy_hex as hh
 import gen
 from collections import defaultdict
 
 
+
 d=3
-rounds = 2
+rounds = 4
 # Global dictionary to store all square tables by step
 
 
@@ -14,7 +15,7 @@ all_coords=hh.get_dataset(d)
 print(sorted(all_coords, key=lambda a: (a.real, a.imag)))
 
 builder = gen.Builder.for_qubits(all_coords)
-builder.tick()
+
 recorded_measurements = set()
 for step in range(rounds):
     twobody = hh.TwoBodyTileGenerator(table = table[step % 2], code_distance=d)
@@ -29,7 +30,6 @@ for step in range(rounds):
     )
     if step == 0:
         print(circuitbuilder._collect_qubit_sets())
-        circuitbuilder.apply_circuit_stage("init")
     circuitbuilder.generate_round_circuit()
     detector = hh.ConstructDetectors(
         builder,
@@ -47,7 +47,10 @@ for step in range(rounds):
         detector.detector_generator()
     
 circuit = builder.circuit
+circuit = gen.NoiseModel.heavy_hex().noisy_circuit(circuit)
+
 circuit_test = circuit.diagram('timeline-svg')
+
 if circuit_test is None:
     raise ValueError("diagram('timeline-svg') returned None — circuit may be empty or malformed.")
 

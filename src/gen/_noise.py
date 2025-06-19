@@ -199,6 +199,64 @@ class NoiseModel:
         )
 
     @staticmethod
+    def heavy_hex() -> 'NoiseModel':
+        """
+        Noise model tuned to the heavy-hex device parameters (Table I).
+
+        ┌────────────────────────┬────────┐
+        │ parameter              │ value  │
+        ├────────────────────────┼────────┤
+        │ p₁Q   (1-qubit gate)   │ 0.02 % │
+        │ p₂Q   (2-qubit gate)   │ 0.41 % │
+        │ p_q.meas (quantum)     │ 1.2 %  │
+        │ p_c.meas (classical)   │ 4.2 %  │
+        │ p_idle                 │ 1.2 %  │
+        │ p_reset                │ 7.5 %  │
+        └────────────────────────┴────────┘
+
+        *   Gate errors are modelled as depolarisation **before** each Clifford gate.
+        *   Measurement errors are split:
+            - quantum part → an `X_ERROR` on the measured qubit with p_q.meas
+            - classical part → result flip probability p_c.meas
+        *   Data qubits that are idle while other qubits are being measured/reset
+            suffer depolarising noise with p_idle.
+        *   Reset is followed by an `X_ERROR` with p_reset.
+        """
+        p_1q = 0.0002      # 0.02 %
+        p_2q = 0.0041      # 0.41 %
+        p_q_meas = 0.012   # 1.2 %
+        p_c_meas = 0.042   # 4.2 %
+        p_idle = 0.012     # 1.2 %
+        
+        p_reset = 0.075    # 7.5 %
+
+        return NoiseModel(
+            # Idling depolarisation (applies during measurement / reset periods)
+            idle_depolarization=p_idle,
+
+            # Clifford‑gate noise
+            any_clifford_1q_rule=NoiseRule(after={'DEPOLARIZE1': p_1q}),
+            any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': p_2q}),
+
+            # Measurement noise (quantum part + classical result flip)
+            measure_rules={
+                'Z':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
+                'X':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
+                'Y':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
+                'ZZ': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
+                'XX': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
+                'YY': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
+            },
+
+            # Reset noise
+            gate_rules={
+                'R':  NoiseRule(after={'X_ERROR': p_reset}),
+                'RX': NoiseRule(after={'Z_ERROR': p_reset}),
+                'RY': NoiseRule(after={'X_ERROR': p_reset}),
+            }
+        )
+    
+    @staticmethod
     def uniform_depolarizing(p: float) -> 'NoiseModel':
         """Near-standard circuit depolarizing noise.
 

@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple, Set
 import gen
 from collections import defaultdict
-
-
+import numpy as np
+    
 @dataclass(frozen=True)
 class Tile:
     measure: complex                 # ID of measurement qubit
@@ -19,7 +19,7 @@ def get_dataset(code_distance: int) -> List[complex]:
     all_coords = {
         q
         for tile in x_tiles
-        for q in tile.data + tile.flags + ((tile.measure,) if tile.measure is not None else ())
+        for q in tile.data + tile.flags + ((tile.measure, ) if tile.measure is not None else ())
     }.union(
         q for tile in z_tiles for q in tile.flags
     )
@@ -188,56 +188,51 @@ class HeavyHexCircuitBuilder:
         self.flags: set = set()  # Set of flag qubits
         self._collect_qubit_sets()  # Collect unique qubits from tiles
 
-    def _add_x_circuit(self):
+    def _add_x_circuit(self, tile: Tile):  
         """
-        Adds an optimized 4-Body X-check circuit for tiles.
+        Adds an 4-Body X-check circuit for the specified tile.
 
-        Operations across tiles in the same spatial region and phase are grouped together
-        and applied in parallel to minimize circuit depth.
+        This method constructs the X-check stabilizer measurement circuit for a given tile in the heavy hex code. 
+        The tile must contain either 2 or 4 data qubits and exactly 2 flag qubits. The measurement qubit is used 
+        to check the parity of the data qubits via a sequence of Hadamard and controlled-X (CX) gates, with flag
+        qubits providing additional fault tolerance.
+
+        Args:
+            tile (Tile): The tile object containing the coordinates of the measurement, data, and flag qubits.
+
+        Raises:
+            ValueError: If the tile does not have 2 or 4 data qubits.
+
+        Circuit structure:
+            - Applies a Hadamard gate to the measurement qubit.
+            - For each data qubit:
+                - Selects the appropriate flag qubit based on its position relative to the data qubit.
+                - Applies a sequence of CX gates between flag, data, and measurement qubits to implement the X-check.
+            - Applies a final Hadamard gate to the measurement qubit.
         """
+        m = tile.measure
+        data_length = len(tile.data)
+        
+        if data_length not in (2, 4):
+            raise ValueError(f"Invalid number of data qubits for X-check: {data_length}")
+        
+        # 1) prepare ancilla in |+⟩
+        # self.builder.gate("H", [m])
 
-        def operations(op: int, f: complex, d: complex, m: complex):
-            if op == 0:
-                self.builder.gate2("CX", [(f, d)])
-            elif op == 1:
-                self.builder.gate2("CX", [(m, f)])
-            elif op == 2:
-                self.builder.gate2("CX", [(f, d)])
+        # 2) do flag–data triangles
+        for d_qubit in tile.data:
+            # choose the flag that shares the same row (real part) with this data qubit
+            flag = tile.flags[0] if tile.flags[0].real == d_qubit.real else tile.flags[1]
 
-        # Define selector functions for the 4 tile quadrants
-        def selectors(data, flags, pos):
-            if pos == "TL":
-                return data[0].imag < flags[0].imag and data[0].real == flags[0].real, flags[0], data[0]
-            if pos == "BL":
-                return data[1].imag < flags[1].imag and data[1].real == flags[1].real, flags[1], data[1]
-            if pos == "TR":
-                if len(data) == 4:
-                    valid = data[2].imag > flags[0].imag and data[2].real == flags[0].real
-                    return valid, flags[0], data[2]
-                else:
-                    valid = data[0].imag > flags[0].imag and data[0].real == flags[0].real
-                    return valid, flags[0], data[0]
-            if pos == "BR":
-                return data[-1].imag > flags[1].imag and data[-1].real == flags[1].real, flags[1], data[-1]
+            # CX(f, d)  ──>  CX(m, f)  ──>  CX(f, d)
+            self.builder.gate2("CX", [(flag, d_qubit)])
+            self.builder.gate2("CX", [(m, flag)])
+            self.builder.gate2("CX", [(flag, d_qubit)])
 
-        regions = ["TL", "BL", "TR", "BR"]
+        # 3) return ancilla to Z basis
+        # self.builder.gate("H", [m])
 
-
-        for region in regions:
-            for op in range(3):
-                for tile in self.tile_group_x:
-                    m = tile.measure
-                    data = sorted(tile.data, key=lambda a: (a.imag, a.real))
-                    flags = sorted(tile.flags, key=lambda a: a.real)
-
-                    valid, f, d = selectors(data, flags, region)
-                    if valid:
-                        operations(op, f, d, m)
-
-                self.builder.shift_coords(dt=1)
-                self.builder.tick()
-
-    def _add_z_circuit(self):
+    def _add_z_circuit(self, tile: Tile):
         """
         Adds a 2-body Z-check circuit for the given tile.
 
@@ -251,36 +246,20 @@ class HeavyHexCircuitBuilder:
         Raises:
             ValueError: If the number of data qubits in the tile is not exactly two.
         """
-        # Define selector functions for the 4 tile quadrants
-        def selectors(data, flags, pos):
-            if pos == "L":
-                return data[0].imag < flags[0].imag and data[0].real == flags[0].real, flags[0], data[0]
-            if pos == "R":
-                return data[1].imag > flags[0].imag and data[1].real == flags[0].real, flags[0], data[1]
-
-        regions = ["L", "R"]
-        for phase in [1, 0]:
-            for region in regions:
-                for tile in self.tile_group_z:
-                    if tile.phase!= phase:
-                        continue
-                    data_length = len(tile.data)
-                    if data_length != 2:
-                        raise ValueError(f"Invalid number of data qubits for Z-check: {data_length}")
-                    data = sorted(tile.data, key=lambda a: a.imag)
-                    flags = sorted(tile.flags, key=lambda a: a.real)
-                    valid, f, d = selectors(data, flags, region)
-                    if valid:
-                        self.builder.gate2("CX", [(d, f)])
-                self.builder.shift_coords(dt=1)
-                self.builder.tick()
+        data_length = len(tile.data)
+        if data_length != 2:
+            raise ValueError(f"Invalid number of data qubits for Z-check: {data_length}")
+        d1, d2 = tile.data
+        f = tile.flags[0]
+        # Standard Z-check structure: two CX(d, f)
+        self.builder.gate2("CX", [(d1, f)])
+        self.builder.gate2("CX", [(d2, f)])
 
 
     def _collect_qubit_sets(self):
-        self.data = {q for tile in self.tile_group_x for q in tile.data}
+        self.data = {data for tile in self.tile_group_x for data in tile.data}
         self.measure = {tile.measure for tile in self.tile_group_x}
-        self.flags = {q for tile in self.tile_group_z for q in tile.flags}
-        self.flags.update(q for tile in self.tile_group_x for q in tile.flags)
+        self.flags = {flag for tile in self.tile_group_z for flag in tile.flags}
         return self.data, self.measure, self.flags
 
     def apply_circuit_stage(self, stage: str):
@@ -298,23 +277,18 @@ class HeavyHexCircuitBuilder:
 
         # Apply the operator to all measurement and flag qubits
         if stage == "init":
-            self.builder.gate("R", self.flags)
-            self.builder.gate("RX", self.data)
-            self.builder.gate("RX", self.measure)
-            self.builder.tick()
-
+            self.builder.gate("R", get_dataset(self.code_distance))
+            self.builder.gate("H", self.data)
 
         elif stage == "R":
-            self.builder.gate("RX", self.measure)
+            self.builder.gate("R", self.measure)
             self.builder.gate("R", self.flags)
-            self.builder.shift_coords(dt=1)
-            self.builder.tick()
 
         elif stage == "M":
             # M on measure qubits with tracking            
             self.builder.measure(
                 self.measure,
-                basis='X',
+                basis='Z',
                 tracker_key=lambda q: q,
                 save_layer=f'x_round_{self.step}',
             )
@@ -357,14 +331,31 @@ class HeavyHexCircuitBuilder:
         grouped by phase, and adds measurement operations for all measurement and flag qubits.
         """
         # Reset the circuit stage
-        if self.step == 0:
-            self.apply_circuit_stage("init")
-        else:
-            self.apply_circuit_stage("R")         
+        if self.step > 0:
+            self.apply_circuit_stage("R")
 
-        self._add_x_circuit()
+        self.builder.gate("H",self.measure)
+        self.builder.shift_coords(dt=1)
+        self.builder.tick()
 
-        self._add_z_circuit()
+        # Add X-checks by phase using a single loop for each phase
+        for phase in [1, 0]:
+            for tile in self.tile_group_x:
+                if tile.phase == phase:
+                    self._add_x_circuit(tile)
+            self.builder.shift_coords(dt=1)
+            self.builder.tick()
+
+
+        self.builder.gate("H", self.measure)
+
+        # Add Z-checks by phase
+        for phase in [1, 0]:
+            for tile in self.tile_group_z:
+                if tile.phase == phase:
+                    self._add_z_circuit(tile)
+            self.builder.shift_coords(dt=1)
+            self.builder.tick()
         
         # Apply the circuit stage
         self.apply_circuit_stage("M")
