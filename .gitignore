@@ -27,4 +27,4 @@ getting_started.ipynb
 *.tmp
 
 # Ignore temp or autosave copies
-~$*
+src/heavyhex/_heavy_hex_old.py
