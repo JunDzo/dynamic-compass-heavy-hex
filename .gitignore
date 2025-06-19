@@ -1,4 +1,30 @@
-/.DS_Store
-/._circuit-timeline.svg
-/._pyproject.toml
-/getting_started.ipynb
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Mac resource fork files (appear as dot-underscore)
+._*
+
+# Hidden dot-underscore files like .__filename
+.__*
+
+# Compiled Python cache
+__pycache__/
+*.py[cod]
+
+# Jupyter notebooks you don't want to track
+getting_started.ipynb
+
+# Project config you might want ignored
+.pyproject.toml
+
+# Backup or autosave files
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Ignore temp or autosave copies
+~$*
