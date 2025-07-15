@@ -1,62 +1,61 @@
 import _heavy_hex as hh
 import gen
-from collections import defaultdict
 
 
+import os
 
-d=3
-rounds = 4
-# Global dictionary to store all square tables by step
+os.makedirs("out/circuits", exist_ok=True)
 
 
-# table = [[0+1j, 1+2j, 2+1j, 3+2j],[0 + 3j , 1 + 0j, 2 + 3j , 3 + 0j]]
-table=[[],[]]
-all_coords=hh.get_dataset(d)
-print(sorted(all_coords, key=lambda a: (a.real, a.imag)))
-
-builder = gen.Builder.for_qubits(all_coords)
-
-recorded_measurements = set()
-for step in range(rounds):
-    twobody = hh.TwoBodyTileGenerator(table = table[step % 2], code_distance=d)
-    fourbody = hh.FourBodyTileGenerator(d)
-    circuitbuilder = hh.HeavyHexCircuitBuilder(
-        builder,
-        d,
-        step,
-        fourbody.generate_4body_check(),
-        twobody.generate_2body_checks(),
-        recorded_measurements
-    )
-    if step == 0:
-        print(circuitbuilder._collect_qubit_sets())
-    circuitbuilder.generate_round_circuit()
-    detector = hh.ConstructDetectors(
-        builder,
-        d,
-        step,
-        twobody.generate_2body_checks(),
-        fourbody.generate_4body_check(),
-        recorded_measurements,
-        table[step % 2]
-    )
-    if step == 0:
-        a=detector.init_x_detectors()
-        print(a)
-    else:
-        detector.detector_generator()
+for d in range(3, 11):
+    table = [[], []]
+    all_coords = hh.get_dataset(d)
+    r = d * 4
+    p = 0.001
+    noise = "uniform"
+    c_name = "heavy_hex"
+    q = len(all_coords)
+    b = "Z"
+    g = "all.stim"
     
-circuit = builder.circuit
-circuit = gen.NoiseModel.heavy_hex().noisy_circuit(circuit)
+    # print(sorted(all_coords, key=lambda a: (a.real, a.imag)))
 
-circuit_test = circuit.diagram('timeline-svg')
+    # builder = gen.Builder.for_qubits(all_coords)
 
-if circuit_test is None:
-    raise ValueError("diagram('timeline-svg') returned None — circuit may be empty or malformed.")
+    # recorded_measurements = set()
+    # fourbody = hh.FourBodyTileGenerator(d)
+    # for step in range(r):
+    #     is_end = True if step == r - 1 else False
+    #     twobody = hh.TwoBodyTileGenerator(table=table[step % 2], code_distance=d)
+    #     circuitbuilder = hh.HeavyHexCircuitBuilder(
+    #         builder,
+    #         d,
+    #         step,
+    #         fourbody.generate_4body_check(),
+    #         twobody.generate_2body_checks(),
+    #         recorded_measurements
+    #     )
+    #     circuitbuilder.generate_round_circuit(b,is_end)
+    #     detector = hh.ConstructDetectors(
+    #         builder,
+    #         d,
+    #         step,
+    #         twobody.generate_2body_checks(),
+    #         fourbody.generate_4body_check(),
+    #         recorded_measurements,
+    #     )
+    #     if step == 0:
+    #         a = detector.init_detectors(b)
+    #         # print(a)
+    #     else:
+    #         detector.detector_generator(table[(step - 1) % 2],b, is_end)
 
+    # circuit = builder.circuit
+    circuit = hh.make_heavy_hex_circuit(table=table, diameter=d, rounds=r, basis=b)
+    circuit = gen.NoiseModel.uniform_depolarizing(p).noisy_circuit(circuit)
 
-with open("circuit-timeline.svg", "w") as svg_file:
-    svg_file.write(str(circuit_test))
+    filename = f"out/circuits/r={r},d={d},p={p},noise={noise},c={c_name},q={q},b={b},g={g}"
 
-# from gen._util import sorted_complex
-# print(sorted_complex(all_coords))
+    with open(filename, "w") as f:
+        f.write(str(circuit))
+

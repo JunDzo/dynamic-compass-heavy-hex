@@ -37,7 +37,7 @@ def main_generate_circuits(
     parser.add_argument("--diameter", nargs='+', required=True, type=int)
     parser.add_argument("--rounds", nargs='+', required=True, type=str)
     parser.add_argument("--noise_strength", nargs='+', default=(None,), type=float)
-    parser.add_argument("--noise_model", nargs='+', required=True, choices=['si1000', 'uniform', 'None'])
+    parser.add_argument("--noise_model", nargs='+', required=True, choices=['si1000', 'uniform','heavy_hex', 'None'])
     parser.add_argument("--style", nargs='+', required=True, choices=constructions.keys())
     parser.add_argument("--convert_to_cz", nargs='+', default=('auto',), choices=['auto', '1', '0'])
     parser.add_argument("--debug_out_dir", default=None, type=str)
@@ -111,6 +111,8 @@ def _generate_circuits(
             auto_cz = True
         elif noise_model_name in ['uniform', 'UniformDepolarizing']:
             noise_model = NoiseModel.uniform_depolarizing(noise_strength)
+        elif noise_model_name == 'heavy_hex':
+            noise_model = NoiseModel.heavy_hex()
         elif noise_model_name == "None":
             noise_model = None
         else:

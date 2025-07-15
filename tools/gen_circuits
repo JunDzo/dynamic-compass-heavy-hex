@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+import heavyhex._heavy_hex as hh
+import gen
+import argparse
+import os
+import ast
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out_dir", type=str, default="out/circuits")
+    parser.add_argument("--diameter", type=int, required=True)
+    parser.add_argument("--rounds", type=str, required=True)  # Allow string: int or "auto"
+    parser.add_argument("--noise_model", type=str, default="uniform")
+    parser.add_argument("--noise_strength", type=float, default=0.001)
+    parser.add_argument("--style", type=str, default="heavy_hex")
+    parser.add_argument("--b", type=str, default="Z")
+    parser.add_argument("--table_file", type=str, help="Path to a file containing the table variable as a Python literal")
+
+    args = parser.parse_args()
+
+    if args.rounds == "auto":
+        rounds = 4 * args.diameter
+    else:
+        rounds = int(args.rounds)
+
+    if args.table_file:
+        with open(args.table_file) as f:
+            table = ast.literal_eval(f.read())
+    else:
+        table = [[], []]
+
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    circuit = hh.make_heavy_hex_circuit(
+        table=table,
+        diameter=args.diameter,
+        rounds=rounds,
+        basis=args.b
+    )
+
+    if args.noise_model == "uniform":
+        circuit = gen.NoiseModel.uniform_depolarizing(args.noise_strength).noisy_circuit(circuit)
+    elif args.noise_model == "IBM1907":
+        circuit = gen.NoiseModel.IBM1907(args.noise_strength).noisy_circuit(circuit)
+    elif args.noise_model == "heavy_hex":
+        circuit = gen.NoiseModel.heavy_hex().noisy_circuit(circuit)
+    else:
+        raise ValueError(f"Unsupported noise model: {args.noise_model}")
+
+    q = len(hh.get_dataset(args.diameter))
+    filename = f"{args.out_dir}/r={rounds},d={args.diameter},p={args.noise_strength},noise={args.noise_model},c={args.style},q={q},b={args.b},g=all.stim"
+
+    with open(filename, "w") as f:
+        f.write(str(circuit))
+
+if __name__ == "__main__":
+    main()

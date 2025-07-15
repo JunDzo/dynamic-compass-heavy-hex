@@ -1,15 +1,16 @@
 import stim
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Set
+from typing import List, Union, Dict, Set, Tuple, Callable
 import gen
 from collections import defaultdict
+import warnings
 
 
 @dataclass(frozen=True)
 class Tile:
     measure: complex                 # ID of measurement qubit
-    flags: Tuple[complex]             # Two flag qubits
-    data: Tuple[complex]              # 2 or 4 data qubits
+    flags: Tuple[complex, ...]       # Two flag qubits (variable length)
+    data: Tuple[complex, ...]        # 2 or 4 data qubits (variable length)
     phase: int = 0                   # Phase of the tile (0 or 1)
 
 def get_dataset(code_distance: int) -> List[complex]:
@@ -79,6 +80,7 @@ class TwoBodyTileGenerator:
                 tile for tile in self.tile_group
                 if bad_flags_set.isdisjoint(tile.flags)
             ]
+        return list(self.tile_group)
 
     def _initialize_2body_check_tiles(self) -> List[Tile]:
         """
@@ -95,17 +97,17 @@ class TwoBodyTileGenerator:
                 data = [complex(i, col_offset-0.5), complex(i, col_offset + 0.5)]
                 flags = [complex(i, col_offset)]
                 phase = 0 if col_offset % 2 == 0 else 1
-                tile_group_2body.append(Tile(measure=None, flags=flags, data=data, phase=phase))
+                tile_group_2body.append(Tile(measure=None, flags=flags, data=data, phase=phase)) # type: ignore
         if tile_group_2body:
             return tile_group_2body
         else:
             raise ValueError("Bad function generate_initial_2body_checks: no tiles generated.")
 
-    def generate_2body_checks(self) -> List[Tile]:
-        if self.table:
+    def generate_2body_checks(self, with_table:bool=True) -> List[Tile]:
+        if self.table and with_table:
             self.tile_group = self._remove_invalid_coordinates()
         else:
-            self.tile_group =self._initialize_2body_check_tiles()
+            self.tile_group = self._initialize_2body_check_tiles()
 
         return self.tile_group
 
@@ -149,7 +151,7 @@ class FourBodyTileGenerator:
         phase = 0 if col_offset % 2 == 0 else 1 
         return Tile(measure, flags, data, phase)
 
-    def generate_4body_check(self) -> List[Tile]:
+    def generate_4body_check(self) -> Set[Tile]:
         """Generates tiles for 4-body checks in the heavy hex code."""
         m = 0
         rows = cols = self.code_distance - 1
@@ -175,7 +177,13 @@ class FourBodyTileGenerator:
         return self.tile_group
 
 class HeavyHexCircuitBuilder:
-    def __init__(self, builder: gen.Builder, code_distance: int, step: int, tile_group_x: List[Tile], tile_group_z: List[Tile], recorded_measurement_keys: set):
+    def __init__(self, 
+                 builder: gen.Builder, 
+                 code_distance: int, 
+                 step: int, 
+                 tile_group_z: List[Tile], 
+                 tile_group_x: Set[Tile],                  
+                 recorded_measurement_keys: set):
         self.code_distance = code_distance
         self.tile_group_x = tile_group_x
         self.tile_group_z = tile_group_z
@@ -203,39 +211,76 @@ class HeavyHexCircuitBuilder:
                 self.builder.gate2("CX", [(m, f)])
             elif op == 2:
                 self.builder.gate2("CX", [(f, d)])
+            elif op == 3:
+                self.builder.gate2("CX", [(m, f)])
 
         # Define selector functions for the 4 tile quadrants
         def selectors(data, flags, pos):
             if pos == "TL":
-                return data[0].imag < flags[0].imag and data[0].real == flags[0].real, flags[0], data[0]
+                return len(data) == 4, data[0].imag < flags[0].imag and data[0].real == flags[0].real, flags[0], data[0]
             if pos == "BL":
-                return data[1].imag < flags[1].imag and data[1].real == flags[1].real, flags[1], data[1]
+                return len(data) == 4, data[1].imag < flags[1].imag and data[1].real == flags[1].real, flags[1], data[1]
             if pos == "TR":
                 if len(data) == 4:
                     valid = data[2].imag > flags[0].imag and data[2].real == flags[0].real
-                    return valid, flags[0], data[2]
+                    return True,valid, flags[0], data[2]
                 else:
                     valid = data[0].imag > flags[0].imag and data[0].real == flags[0].real
-                    return valid, flags[0], data[0]
+                    return False, valid, flags[0], data[0]
             if pos == "BR":
-                return data[-1].imag > flags[1].imag and data[-1].real == flags[1].real, flags[1], data[-1]
+                return len(data) == 4, data[-1].imag > flags[1].imag and data[-1].real == flags[1].real, flags[1], data[-1]
 
-        regions = ["TL", "BL", "TR", "BR"]
-
-
-        for region in regions:
-            for op in range(3):
+        schedule = [
+        [("TL", 0)],
+        [("TL", 1), ("BL", 0)],
+        [("TL", 2), ("BL", 1)],
+        [("TL", 3), ("BL", 2)],
+        [("BL", 3), ("TR", 0)],
+        [("TR", 1), ("BR", 0)],
+        [("TR", 2), ("BR", 1)],
+        [("TR", 3), ("BR", 2)],
+        [("BR", 3)],
+        ]
+        # schedule = [
+        # [("TL", 1)],
+        # [("TL", 2), ("BL", 1)],
+        # [("TL", 3), ("BL", 2)],
+        # [("BL", 3), ("TR", 0)],
+        # [("TR", 1), ("BR", 0)],
+        # [("TR", 2), ("BR", 1)],
+        # [("TR", 3), ("BR", 2)],
+        # [("BR", 3)],
+        # ]
+        
+        for moment in schedule:
+            for region, op in moment:
                 for tile in self.tile_group_x:
-                    m = tile.measure
-                    data = sorted(tile.data, key=lambda a: (a.imag, a.real))
-                    flags = sorted(tile.flags, key=lambda a: a.real)
+                    if len(tile.data) == 2 or (len(tile.data) == 4 and op != 3):
+                        m = tile.measure
+                        data = sorted(tile.data, key=lambda a: (a.imag, a.real))
+                        flags = sorted(tile.flags, key=lambda a: a.real)
+                        result = selectors(data, flags, region)
+                        if result is not None:
+                            full, valid, f, d = result
+                            if valid:
+                                operations(op, f, d, m)
 
-                    valid, f, d = selectors(data, flags, region)
-                    if valid:
-                        operations(op, f, d, m)
+            self.builder.shift_coords(dt=1)
+            self.builder.tick()
 
-                self.builder.shift_coords(dt=1)
-                self.builder.tick()
+        # for region in regions:
+        #     for op in range(3):
+        #         for tile in self.tile_group_x:
+        #             m = tile.measure
+        #             data = sorted(tile.data, key=lambda a: (a.imag, a.real))
+        #             flags = sorted(tile.flags, key=lambda a: a.real)
+
+        #             valid, f, d = selectors(data, flags, region)
+        #             if valid:
+        #                 operations(op, f, d, m)
+
+        #         self.builder.shift_coords(dt=1)
+        #         self.builder.tick()
 
     def _add_z_circuit(self):
         """
@@ -259,31 +304,31 @@ class HeavyHexCircuitBuilder:
                 return data[1].imag > flags[0].imag and data[1].real == flags[0].real, flags[0], data[1]
 
         regions = ["L", "R"]
-        for phase in [1, 0]:
-            for region in regions:
-                for tile in self.tile_group_z:
-                    if tile.phase!= phase:
-                        continue
-                    data_length = len(tile.data)
-                    if data_length != 2:
-                        raise ValueError(f"Invalid number of data qubits for Z-check: {data_length}")
-                    data = sorted(tile.data, key=lambda a: a.imag)
-                    flags = sorted(tile.flags, key=lambda a: a.real)
-                    valid, f, d = selectors(data, flags, region)
+        for region in regions:
+            for tile in self.tile_group_z:
+                data_length = len(tile.data)
+                if data_length != 2:
+                    raise ValueError(f"Invalid number of data qubits for Z-check: {data_length}")
+                data = sorted(tile.data, key=lambda a: a.imag)
+                flags = sorted(tile.flags, key=lambda a: a.real)
+                result = selectors(data, flags, region)
+                if result is not None:
+                    valid, f, d = result
                     if valid:
                         self.builder.gate2("CX", [(d, f)])
-                self.builder.shift_coords(dt=1)
-                self.builder.tick()
+            self.builder.shift_coords(dt=1)
+            self.builder.tick()
 
 
     def _collect_qubit_sets(self):
         self.data = {q for tile in self.tile_group_x for q in tile.data}
         self.measure = {tile.measure for tile in self.tile_group_x}
-        self.flags = {q for tile in self.tile_group_z for q in tile.flags}
-        self.flags.update(q for tile in self.tile_group_x for q in tile.flags)
-        return self.data, self.measure, self.flags
+        self.flags_z = {q for tile in self.tile_group_z for q in tile.flags}
+        self.flags_x = {q for tile in self.tile_group_x for q in tile.flags}
+        self.flags = self.flags_z.union(self.flags_x)
+        return self.data, self.measure, self.flags, self.flags_z, self.flags_x
 
-    def apply_circuit_stage(self, stage: str):
+    def apply_circuit_stage(self, stage: str, basis: str) -> None:
         """
         Applies a specific initialization or measurement stage to the circuit.
 
@@ -299,7 +344,7 @@ class HeavyHexCircuitBuilder:
         # Apply the operator to all measurement and flag qubits
         if stage == "init":
             self.builder.gate("R", self.flags)
-            self.builder.gate("RX", self.data)
+            self.builder.gate("R" if basis == 'Z' else "RX", self.data)
             self.builder.gate("RX", self.measure)
             self.builder.tick()
 
@@ -319,7 +364,7 @@ class HeavyHexCircuitBuilder:
                 save_layer=f'x_round_{self.step}',
             )
             self.builder.measure(
-                self.flags,
+                self.flags_z,
                 basis='Z',
                 tracker_key=lambda q: q,
                 save_layer=f'z_round_{self.step}',
@@ -329,7 +374,7 @@ class HeavyHexCircuitBuilder:
             for m in self.measure:
                 key = gen.AtLayer(m, f'x_round_{self.step}')
                 self.recorded_measurement_keys.add(key)
-            for f in self.flags:
+            for f in self.flags_z:
                 key = gen.AtLayer(f, f'z_round_{self.step}')
                 self.recorded_measurement_keys.add(key)
 
@@ -349,7 +394,7 @@ class HeavyHexCircuitBuilder:
         return self.recorded_measurement_keys
 
 
-    def generate_round_circuit(self):
+    def generate_round_circuit(self, basis: str, is_end: bool = False):
         """
         Generates a round of the heavy hex circuit. Performing one X-check and one Z-check is one round.
 
@@ -358,56 +403,86 @@ class HeavyHexCircuitBuilder:
         """
         # Reset the circuit stage
         if self.step == 0:
-            self.apply_circuit_stage("init")
+            self.apply_circuit_stage("init", basis=basis)
+
         else:
-            self.apply_circuit_stage("R")         
+            self.apply_circuit_stage("R", basis=basis)         
 
-        self._add_x_circuit()
+        if basis == 'Z':
+            self._add_z_circuit()
+            self._add_x_circuit()
+        else:
+            self._add_x_circuit()
+            self._add_z_circuit()
 
-        self._add_z_circuit()
-        
         # Apply the circuit stage
-        self.apply_circuit_stage("M")
-        
+        self.apply_circuit_stage("M", basis=basis)
+        if is_end:
+            self.do_end_measures(basis=basis)
 
         return self.builder.circuit
 
+    def do_end_measures(self, basis: str):
+        layer = 'x_round_end' if basis == 'X' else 'z_round_end'
+        self.builder.measure(self.data, basis=basis, save_layer=layer)
+
+        self.recorded_measurement_keys.update(gen.AtLayer(q, layer) for q in self.data)
+
+        if basis == 'X':
+            qubits = [gen.AtLayer(q, layer) for q in self.data if q.real == 0]
+        elif basis == 'Z':
+            qubits = [gen.AtLayer(q, layer) for q in self.data if q.imag == 0.5]
+        else:
+            warnings.warn(f"Unknown basis {basis} for end measures. Using X basis by default.")
+            qubits = [gen.AtLayer(q, 'x_round_end') for q in self.data if q.real == 0]
+
+        self.builder.obs_include(qubits, obs_index=0)
+    
+
 
 class ConstructDetectors:
-    def __init__(self, builder: gen.Builder, code_distance: int, step: int , tile_group_z: List[Tile], tile_group_x: List[Tile], recorded_measurement_keys: set, table: List[complex]):
+    def __init__( self, 
+                  builder: gen.Builder,
+                  code_distance: int,
+                  step: int,
+                  tile_group_z: List[Tile],
+                  tile_group_x: Set[Tile],
+                  recorded_measurement_keys: set 
+                  ):
         self.builder = builder
         self.code_distance = code_distance
         self.tile_group_z = tile_group_z
         self.tile_group_x = tile_group_x
         self.recorded_measurement_keys = recorded_measurement_keys
-        self.table = table
         self.step = step
 
-    def _build_detector(self, measurement_qubit: complex, initial_detectors: bool = False):
-        """Builds a detector for the given measurement qubit."""
-        if initial_detectors:
-            self.circuit.append('DETECTOR', [self.coord_to_index[measurement_qubit]])
-        else:
-            self.circuit.append('DETECTOR', [self.coord_to_index[measurement_qubit], 'X'])
-
-    def init_x_detectors(self):
-        """Initializes X detectors in the circuit."""
-        
-        for tile in self.tile_group_x:
-            keys= {gen.AtLayer(tile.measure, 'x_round_0')}
+    def init_detectors(self, basis: str):
+        group = self.tile_group_x if basis == 'X' else self.tile_group_z
+        for tile in group:
+            keys = {gen.AtLayer(tile.measure if basis == 'X' else tile.flags[0], f'{basis.lower()}_round_0')}
             if keys:
-                min_pos = tile.measure
+                min_pos = tile.measure if basis == 'X' else min(tile.flags, key=gen.complex_key)
                 self.builder.detector(
-                keys,
-                pos=min_pos,
-                extra_coords=[1]
-            )
+                    keys,
+                    pos=min_pos,
+                    extra_coords=[1] if basis == 'X' else [2]
+                )
+        # Shift coordinates and tick the builder to finalize the initialization
         self.builder.shift_coords(dt=1)
         self.builder.tick()
-        return self.tile_group_x
 
-
-    def general_x_detectors(self):
+    def end_detectors(self, table: List[complex], basis: str, org_tile_group_z: List[Tile] = []):  # should be the table in current time step
+        """Generates detectors for the end of the circuit."""
+        if self.step == 0:
+            raise ValueError("Step must be greater than 0 to generate end detectors.")
+        if basis == 'X':
+            self.general_x_detectors(table, basis, is_end=True) 
+        elif basis == 'Z':
+            self.general_z_detectors(basis, is_end=True, org_tile_group_z=org_tile_group_z)
+        else:
+            raise ValueError(f"Unknown basis {basis} for end detectors. Use 'X' or 'Z'.")
+        
+    def general_x_detectors(self, table: List[complex], basis: str, is_end: bool = False):  # should be the table in previous time step
         """Performs the X detectors in the circuit. The table is a list of complex numbers representing coordinates (where the real part is the row and the imaginary part is the column)
         of the 2-body measurement formed stabilizers (squares) we want to keep from the previous step (when do 4-body check measurement).
         """
@@ -420,7 +495,7 @@ class ConstructDetectors:
             row = tile.measure.real - 0.5  # Adjust row to match square row
             tiles_by_row[row].append(tile)
         
-        for square in self.table:
+        for square in table:
             row = square.real
             squares_by_row[row].append(square.imag)
             
@@ -453,12 +528,19 @@ class ConstructDetectors:
             # Now do something with each group
             for group in groups:
                 keys = set()
+                keys_end = set()
                 for tile in group:
-                    keys.add(gen.AtLayer(tile.measure, f'x_round_{self.step}')) #current round step
-                    if gen.AtLayer(tile.measure, f'x_round_{self.step - 1}') in self.recorded_measurement_keys:
-                        keys.add(gen.AtLayer(tile.measure, f'x_round_{self.step - 1}')) # last round step
-                    else:
-                        raise ValueError(f"Measurement key {gen.AtLayer(tile.measure, f'x_round_{self.step - 1}')} not found in recorded keys.")
+                    if not is_end:
+                        keys.add(gen.AtLayer(tile.measure, f'x_round_{self.step}')) #current round step
+                        if gen.AtLayer(tile.measure, f'x_round_{self.step - 1}') in self.recorded_measurement_keys:
+                            keys.add(gen.AtLayer(tile.measure, f'x_round_{self.step - 1}')) # last round step
+                        else:
+                            raise ValueError(f"Measurement key {gen.AtLayer(tile.measure, f'x_round_{self.step - 1}')} not found in recorded keys.")
+                    elif is_end and basis == 'X':  # set up the detectors for the end step
+                        for data in tile.data:
+                            keys_end.add(gen.AtLayer(data, f'x_round_end')) #current round step
+                        if gen.AtLayer(tile.measure, f'x_round_{self.step}') in self.recorded_measurement_keys:
+                            keys_end.add(gen.AtLayer(tile.measure, f'x_round_{self.step}'))
 
                 if keys:
                     min_pos = min((tile.measure for tile in group), key=gen.complex_key)
@@ -467,13 +549,17 @@ class ConstructDetectors:
                         pos=min_pos,
                         extra_coords=[1]
                     )
-        
-    def general_z_detectors(self):
-        if self.step == 0:
-            raise ValueError("Step must be greater than 0 to generate Z detectors.")
+                if keys_end:
+                    min_pos = min((tile.measure for tile in group), key=gen.complex_key)
+                    self.builder.detector(
+                        keys_end,
+                        pos=min_pos,
+                        extra_coords=[1]
+                    )
 
+    def seperate_tiles_z(self,tile_group_z: List[Tile]) -> List[List[Tile]]:
         tiles_by_rc = defaultdict(list)
-        for tile in self.tile_group_z:
+        for tile in tile_group_z:
             flag = tile.flags[0]
             row = int(flag.real)
             col = int(flag.imag - 1)  # match square column
@@ -495,13 +581,25 @@ class ConstructDetectors:
                 edge_tiles = [tile for tile in tiles if tile.flags[0].real in {0, self.code_distance - 1}]
                 if edge_tiles:
                     groups.append(edge_tiles)
+        return groups
 
-        check_steps = [self.step - 1, self.step - 2] if self.step > 1 else [self.step - 1]
+
+    def general_z_detectors(self,basis: str, is_end: bool = False, org_tile_group_z: List[Tile]=[]):
+        if self.step == 0:
+            raise ValueError("Step must be greater than 0 to generate Z detectors.")
+        if basis == 'Z' and is_end:
+            tile_group = org_tile_group_z
+        else:
+            tile_group = self.tile_group_z
+        groups = self.seperate_tiles_z(tile_group)
         
+        if not is_end:
+            check_steps = [self.step - 1, self.step - 2] if self.step > 1 else [self.step - 1]
+        elif is_end and basis == 'Z':
+            check_steps = [self.step, self.step - 1]
+
         for group in groups:
             flags = {tile.flags[0] for tile in group}
-            keys  = {gen.AtLayer(flag, f"z_round_{self.step}") for flag in flags}   
-
             prev_step0 = {gen.AtLayer(f, f"z_round_{check_steps[0]}") for f in flags}
             prev_step1 = (
                             {gen.AtLayer(f, f"z_round_{check_steps[1]}") for f in flags}
@@ -511,20 +609,102 @@ class ConstructDetectors:
             recorded = self.recorded_measurement_keys
             have_0   = prev_step0 <= recorded           # all flags present at step - 1
             have_1   = prev_step1 and prev_step1 <= recorded  # all flags present at step - 2 
-
-            if   have_0:
-                keys.update(prev_step0)
-            elif have_1 and not have_0:
-                keys.update(prev_step1)
-            else:
-                keys={}
-
-            if keys:
-                min_pos = min(flags, key=gen.complex_key)
+            if not is_end:
+                
+                keys  = {gen.AtLayer(flag, f"z_round_{self.step}") for flag in flags}
+                if  have_0:
+                    keys.update(prev_step0)
+                elif have_1 and not have_0:
+                    keys.update(prev_step1)
+                else:
+                    keys = keys if basis == "Z" else set()
+                    warnings.warn(f"No previous step keys found for z-detectors at tail {group} at timestep {self.step} ")
+                if keys:
+                    min_pos = min(flags, key=gen.complex_key)
                 self.builder.detector(keys, pos=min_pos, extra_coords=[2])
-    
-    def detector_generator(self):
-        self.general_x_detectors()
-        self.general_z_detectors()
+            elif is_end and basis == 'Z':
+                keys_end = {gen.AtLayer(d, 'z_round_end') for tile in group for d in tile.data}
+                if have_0:
+                    keys_end.update(prev_step0)
+                elif have_1 and not have_0:
+                    keys_end.update(prev_step1)
+                else:
+                    keys_end = set()
+                    warnings.warn(f"No previous step keys found for z-detectors at tail {group} at timestep {self.step} ")
+                if keys_end:
+                    min_pos = min(flags, key=gen.complex_key)
+                    self.builder.detector(keys_end, pos=min_pos, extra_coords=[2])
+
+    def detector_generator(self , table: List,basis: str, is_end: bool = False):
+        self.general_x_detectors(table, basis, is_end)
+        self.general_z_detectors(basis, is_end)
         self.builder.shift_coords(dt=1)
         self.builder.tick()
+
+def make_heavy_hex_circuit(
+    *,
+    table: List,
+    diameter: int,
+    rounds: int,
+    basis: str,
+) -> stim.Circuit:
+    all_coords = get_dataset(diameter)
+    builder = gen.Builder.for_qubits(all_coords)
+    table = filter_table_by_diameter(table, diameter)
+    recorded_measurements = set()
+    fourbody = FourBodyTileGenerator(diameter)
+    
+    for step in range(rounds):
+        is_end = step == rounds - 1
+        twobody = TwoBodyTileGenerator(table=table[step % 2], code_distance=diameter)
+        circuitbuilder = HeavyHexCircuitBuilder(
+            builder,
+            diameter,
+            step,
+            twobody.generate_2body_checks(),
+            fourbody.generate_4body_check(),
+            recorded_measurements,
+        )
+        if step == 0:
+            circuitbuilder._collect_qubit_sets()
+        circuitbuilder.generate_round_circuit(basis, is_end=is_end)
+        detector = ConstructDetectors(
+            builder,
+            diameter,
+            step,
+            twobody.generate_2body_checks(),
+            fourbody.generate_4body_check(),
+            recorded_measurements,
+        )
+        if step == 0:
+            detector.init_detectors(basis)
+        else:
+            if basis == 'X':
+                detector.detector_generator(table[(step - 1) % 2], basis)
+            elif basis == 'Z':
+                detector.detector_generator(table[(step) % 2], basis)
+        if is_end:
+            detector.end_detectors(table=table[step % 2], basis=basis, org_tile_group_z=twobody.generate_2body_checks(with_table=False))
+    return builder.circuit
+
+def filter_table_by_diameter(table: List[List[complex]], diameter: int) -> List[List[complex]]:
+    """
+    Filters the input table so that only coordinates with both real (row) and imaginary (col)
+    parts less than (diameter - 2) are kept.
+
+    Args:
+        table (List[List[complex]]): The input table, a list of lists of complex numbers.
+        diameter (int): The code distance.
+
+    Returns:
+        List[List[complex]]: The filtered table.
+    """
+    limit = diameter - 1
+    filtered = []
+    for step_list in table:
+        step_filtered = [
+            sq for sq in step_list
+            if sq.real < limit and sq.imag < limit
+        ]
+        filtered.append(step_filtered)
+    return filtered

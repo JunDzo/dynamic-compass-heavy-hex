@@ -26,5 +26,18 @@ getting_started.ipynb
 *.bak
 *.tmp
 
-# Ignore temp or autosave copies
-src/heavyhex/_heavy_hex_old.py
+
+# Ignore output directories
+out/
+out*/
+
+# Ignore viewer files
+viewer/
+
+# Ignore specific output files
+heavy_hex_local.slurm
+heavy_hex.slurm
+step1_generate_circuits.sh
+step1_error_rate.sh
+step2_collect_stats.sh
+table.txt

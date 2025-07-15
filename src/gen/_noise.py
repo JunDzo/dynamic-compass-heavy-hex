@@ -255,7 +255,34 @@ class NoiseModel:
                 'RY': NoiseRule(after={'X_ERROR': p_reset}),
             }
         )
-    
+    @staticmethod
+    def IBM1907(p: float) -> 'NoiseModel':
+        """Circuit-level depolarizing noise model based on arXiv:1907.09528 and flag fault tolerance assumptions.
+
+        1. Each 1-qubit gate is followed by a random Pauli {X,Y,Z} with probability p.
+        2. Each 2-qubit gate is followed by a uniform Pauli error on 2 qubits (not I⊗I) with probability p.
+        3. |0⟩ and |+⟩ state prep is faulty with probability 2p/3, flipped to |1⟩ or |−⟩ respectively.
+        4. Measurement results are flipped with probability 2p/3.
+        5. Idling qubits also suffer random Pauli {X,Y,Z} errors with probability p.
+        """
+        return NoiseModel(
+            idle_depolarization=p,
+            any_clifford_1q_rule=NoiseRule(after={'DEPOLARIZE1': p}),
+            any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': p}),
+            measure_rules={
+                'X': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
+                'Y': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
+                'Z': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
+                'XX': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
+                'YY': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
+                'ZZ': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
+            },
+            gate_rules={
+                'RX': NoiseRule(after={'Z_ERROR': 2 * p / 3}),
+                'RY': NoiseRule(after={'X_ERROR': 2 * p / 3}),
+                'R':  NoiseRule(after={'X_ERROR': 2 * p / 3}),
+            }
+        )
     @staticmethod
     def uniform_depolarizing(p: float) -> 'NoiseModel':
         """Near-standard circuit depolarizing noise.
