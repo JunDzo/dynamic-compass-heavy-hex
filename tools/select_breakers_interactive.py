@@ -4,9 +4,9 @@ import matplotlib.patches as patches
 # === USER INPUT ===
 d = int(input("Enter grid size d: "))
 steps = int(input("Enter number of steps: "))
-output_file = input("Output file name (e.g., table.txt, press Enter for default): ")
+output_file = input("Output file name (e.g., breaker_table_d5.txt, press Enter for default): ")
 if not output_file.strip():
-    output_file = "table.txt"
+    output_file = f"data/analysis/breaker_table_d{d}.txt"
 
 # === Function to run one selection ===
 def run_selection(step):
@@ -19,7 +19,7 @@ def run_selection(step):
     ax.set_yticks(range(d))
     ax.grid(True)
     ax.invert_yaxis()  # (0,0) at top-left
-    plt.title(f"Step {step+1}: Click squares to toggle, only (row+col) odd allowed.")
+    plt.title(f"Step {step}")
 
     rects = {}
     for row in range(d-1):
@@ -52,6 +52,11 @@ def run_selection(step):
     fig.canvas.mpl_connect('button_press_event', onclick)
     plt.show()
 
+    # Save selection visualization
+    import os
+    os.makedirs("data/plots/breakers", exist_ok=True)
+    fig.savefig(f"data/plots/breakers/selection_step_{step}.pdf")
+
     return [complex(row, col) for (row, col) in sorted(selected)]
 
 # === Run all steps ===
@@ -61,7 +66,9 @@ for step in range(steps):
     all_steps.append(result)
 
 # === Save ===
+import os
+os.makedirs(os.path.dirname(output_file), exist_ok=True)
 with open(output_file, "w") as f:
     f.write(str(all_steps))
 
-print(f"Saved {steps} selection(s) to {output_file}")
+print(f"✓ Saved {steps} selection(s) to {output_file}")

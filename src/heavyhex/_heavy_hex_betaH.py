@@ -356,15 +356,20 @@ class HeavyHexCircuitBuilder:
         # Apply the operator to all measurement and flag qubits
         if stage == "init":
             self.builder.gate("R", self.flags)
-            self.builder.gate("R" if basis == 'Z' else "RX", self.data)
-            self.builder.gate("RX", self.measure)
+            self.builder.gate("R", self.data)
+            self.builder.gate("R", self.measure)
+            self.builder.tick()
+            self.builder.gate("H", self.measure)
+            if basis == 'X':
+                self.builder.gate("H", self.data)
             self.builder.tick()
 
-
         elif stage == "R":
-            self.builder.gate("RX", self.measure)
+            self.builder.gate("R", self.measure)    
             self.builder.gate("R", self.flags)
             self.builder.shift_coords(dt=1)
+            self.builder.tick()
+            self.builder.gate("H", self.measure)
             self.builder.tick()
 
         elif stage == "M":

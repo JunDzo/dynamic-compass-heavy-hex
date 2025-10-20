@@ -1,43 +1,32 @@
-# macOS system files
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Mac resource fork files (appear as dot-underscore)
-._*
-
-# Hidden dot-underscore files like .__filename
-.__*
-
-# Compiled Python cache
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
 
-# Jupyter notebooks you don't want to track
-getting_started.ipynb
+# Data files (large, regeneratable)
+data/stats/*.csv
+data/analysis/comm_th/*.csv
+data/analysis/swp_sug/*.csv
 
-# Project config you might want ignored
-.pyproject.toml
+# Output plots
+*.pdf
+*.png
+*.svg
 
-# Backup or autosave files
-*~
-*.swp
-*.swo
-*.bak
+# Jupyter
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+._*
+
+# Temporary files
 *.tmp
-
-
-# Ignore output directories
-out/
-out*/
-
-# Ignore viewer files
-viewer/
-
-# Ignore specific output files
-heavy_hex_local.slurm
-heavy_hex.slurm
-step1_generate_circuits.sh
-step1_error_rate.sh
-step2_collect_stats.sh
-table.txt
+*.bak
+*~

@@ -1,6 +1,9 @@
+from os import name
 from typing import Optional, Dict, Set, List, Iterator, Union, AbstractSet, DefaultDict, Any
 
 import collections
+
+from math import sin, cos, pi
 
 import stim
 
@@ -311,6 +314,151 @@ class NoiseModel:
                 'RX': NoiseRule(after={'Z_ERROR': p}),
                 'RY': NoiseRule(after={'X_ERROR': p}),
                 'R': NoiseRule(after={'X_ERROR': p}),
+            }
+        )
+
+
+    @staticmethod
+    def corr_mixing(
+        # Global background and sweep
+        base_prob: float,                  # default probability for all unspecified slots
+        sweep_slot: str,                   # the slot whose probability you sweep to find a threshold
+        sweep_prob: float,                 # current value for the sweep slot (varies when searching threshold)
+
+        # Two independently biased (fixed) slots for the X/Y axes of your 3D surface
+        bias_slot_1: str,                  # e.g. 'D1' , 'M' or 'D2'
+        bias_slot_1_prob: float,           # direct probability for bias_slot_1 (this is your X axis value)
+        bias_slot_2: str,                  # e.g. 'D1' , 'M' or 'D2'
+        bias_slot_2_prob: float,           # direct probability for bias_slot_2 (this is your Y axis value)
+    ) -> 'NoiseModel':
+        """
+        Construct a noise model with:
+        1) a global baseline probability (base_prob) applied to all slots by default,
+        2) two *fixed* biased slots set to explicit probabilities (bias_slot_1_prob, bias_slot_2_prob),
+        3) one *sweep* slot whose probability (sweep_prob) is varied externally when searching for a threshold.
+
+        D1 = 'DEPOLARIZE1'
+        D2 = 'DEPOLARIZE2'
+        M  = 'M' (measurement result flip)
+        idle = 'idle' (idling depolarization)
+        Parameters
+        ----------
+        base_prob : float
+            Probability used for every noise slot not explicitly assigned below.
+            Clamped into [0, 1].
+
+        sweep_slot : str
+            Name of the noise slot that is tied to `sweep_prob`. This slot is varied
+            during threshold searches. Must be distinct from `bias_slot_1` and `bias_slot_2`.
+
+        sweep_prob : float
+            Current probability for `sweep_slot`. In a threshold search you will call
+            this function repeatedly with different `sweep_prob` values. Clamped into [0, 1].
+
+        bias_slot_1 : str
+            Name of the first biased noise slot. This is what you place on the X axis
+            when producing a 3D surface.
+
+        bias_slot_1_prob : float
+            Explicit probability for `bias_slot_1`. This value is fixed while you
+            sweep `sweep_prob`. Clamped into [0, 1].
+
+        bias_slot_2 : str
+            Name of the second biased noise slot. This is what you place on the Y axis
+            when producing a 3D surface.
+
+        bias_slot_2_prob : float
+            Explicit probability for `bias_slot_2`. This value is fixed while you
+            sweep `sweep_prob`. Clamped into [0, 1].
+
+        Returns
+        -------
+        NoiseModel
+            A model where each slot probability is determined by the selector below:
+            - if name == sweep_slot:        sweep_prob
+            - elif name == bias_slot_1:     bias_slot_1_prob
+            - elif name == bias_slot_2:     bias_slot_2_prob
+            - else:                         base_prob
+
+        Constraints
+        -----------
+        - All three slots must be distinct: {sweep_slot, bias_slot_1, bias_slot_2} must have size 3.
+        - Values are clamped into [0, 1].
+        - If two names collide, a ValueError is raised.
+
+        Measure/Reset Semantics
+        -----------------------
+        - Measurement flip probabilities are taken from sel('M').
+        - Reset uses the standard union of independent failure modes:
+            p_reset = p_measure + p_idle - p_measure * p_idle
+        where p_measure = sel('M') and p_idle = sel('idle').
+        - 1q Clifford noise uses sel('DEPOLARIZE1'), 2q Clifford uses sel('DEPOLARIZE2').
+        Adjust these keys if your backend uses different slot names.
+
+        Raises
+        ------
+        ValueError
+            If any of the three slot names are not distinct.
+
+        Examples
+        --------
+        >>> # Build a model at a single grid point (px, py) while the threshold search
+        >>> # will vary sweep_prob elsewhere:
+        >>> model = corr_mixing_direct(
+        ...     base_prob=1e-3,
+        ...     sweep_slot='D2',
+        ...     sweep_prob=sweep_prob,                 # vary this
+        ...     bias_slot_1='D1',      # X axis
+        ...     bias_slot_1_prob=0.0025,        # px
+        ...     bias_slot_2='M',                # Y axis
+        ...     bias_slot_2_prob=0.0010         # py
+        ... )
+        """
+        def clamp(p: float) -> float:
+            return max(0.0, min(1.0, float(p)))
+
+        base_prob = clamp(base_prob)
+        sweep_prob = clamp(sweep_prob)
+        bias_slot_1_prob = clamp(bias_slot_1_prob)
+        bias_slot_2_prob = clamp(bias_slot_2_prob)
+
+        if len({sweep_slot, bias_slot_1, bias_slot_2}) != 3:
+            raise ValueError(
+                f"Slot names must be distinct: sweep_slot='{sweep_slot}', "
+                f"bias_slot_1='{bias_slot_1}', bias_slot_2='{bias_slot_2}'."
+            )
+
+        def sel(name: str) -> float:
+            if name == sweep_slot:
+                return sweep_prob
+            if name == bias_slot_1:
+                return bias_slot_1_prob
+            if name == bias_slot_2:
+                return bias_slot_2_prob
+            return base_prob
+
+        def reset_prob() -> float:
+            p_m = sel('M')
+            p_i = sel('idle')
+            return p_m + p_i - p_m * p_i
+
+        return NoiseModel(
+            idle_depolarization=sel('idle'),
+            any_clifford_1q_rule=NoiseRule(after={'DEPOLARIZE1': sel('D1')}),
+            any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': sel('D2')}),
+            measure_rules={
+                'X':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
+                'Y':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
+                'Z':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
+                # 'XX': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('XX')),
+                # 'YY': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('YY')),
+                # 'ZZ': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('ZZ')),
+            },
+            gate_rules={
+                # Reset and Rx/Ry map to specific Pauli error channels in this codebase.
+                'RX': NoiseRule(after={'Z_ERROR': reset_prob()}),
+                # 'RY': NoiseRule(after={'X_ERROR': sel('X_ERROR')}),
+                'R':  NoiseRule(after={'X_ERROR': reset_prob()}),
             }
         )
 

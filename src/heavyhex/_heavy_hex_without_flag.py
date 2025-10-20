@@ -1,10 +1,9 @@
-import stim  # type: ignore
+import stim
 from dataclasses import dataclass
 from typing import List, Union, Dict, Set, Tuple, Callable
 import gen
 from collections import defaultdict
 import warnings
-from functools import lru_cache
 
 
 @dataclass(frozen=True)
@@ -14,27 +13,10 @@ class Tile:
     data: Tuple[complex, ...]        # 2 or 4 data qubits (variable length)
     phase: int = 0                   # Phase of the tile (0 or 1)
 
-
-@lru_cache(maxsize=13)
-def get_tiles(code_distance: int):
+def get_dataset(code_distance: int) -> List[complex]:
     x_tiles = FourBodyTileGenerator(code_distance).generate_4body_check()
     z_tiles = TwoBodyTileGenerator([], code_distance).generate_2body_checks()
-    return x_tiles, z_tiles
 
-def collect_qubit_sets(code_distance: int):
-    x_tiles, z_tiles = get_tiles(code_distance)
-
-    data = {q for tile in x_tiles for q in tile.data}
-    measure = {tile.measure for tile in x_tiles}
-    flags_z = {q for tile in z_tiles for q in tile.flags}
-    flags_x = {q for tile in x_tiles for q in tile.flags}
-    flags = flags_x | flags_z
-
-    return data, measure, flags
-
-
-def get_dataset(code_distance: int) -> List[complex]:
-    x_tiles, z_tiles = get_tiles(code_distance)
     all_coords = {
         q
         for tile in x_tiles
@@ -42,6 +24,7 @@ def get_dataset(code_distance: int) -> List[complex]:
     }.union(
         q for tile in z_tiles for q in tile.flags
     )
+
     return sorted(all_coords, key=gen.complex_key)
 
 
@@ -193,8 +176,6 @@ class FourBodyTileGenerator:
 
         return self.tile_group
 
-
-
 class HeavyHexCircuitBuilder:
     def __init__(self, 
                  builder: gen.Builder, 
@@ -210,9 +191,10 @@ class HeavyHexCircuitBuilder:
         self.recorded_measurement_keys = recorded_measurement_keys  # Set of measurement qubits to record
         self.coord_to_index: Dict[complex, int] = builder.q2i  # Mapping from complex coordinates to indices
         self.builder = builder  # Builder for the circuit
-        self.data, self.measure, self.flags = collect_qubit_sets(code_distance)
-        self.flags_z = {f for group in tile_group_z for f in group.flags}
-        self.true_flags = self.flags - self.flags_z
+        self.data: set = set()  # Set of data qubits
+        self.measure: set = set()  # Set of measurement qubits
+        self.flags: set = set()  # Set of flag qubits
+        self._collect_qubit_sets()  # Collect unique qubits from tiles
 
     def _add_x_circuit(self):
         """
@@ -338,7 +320,13 @@ class HeavyHexCircuitBuilder:
             self.builder.tick()
 
 
-
+    def _collect_qubit_sets(self):
+        self.data = {q for tile in self.tile_group_x for q in tile.data}
+        self.measure = {tile.measure for tile in self.tile_group_x}
+        self.flags_z = {q for tile in self.tile_group_z for q in tile.flags}
+        self.flags_x = {q for tile in self.tile_group_x for q in tile.flags}
+        self.flags = self.flags_z.union(self.flags_x)
+        return self.data, self.measure, self.flags, self.flags_z, self.flags_x
 
     def apply_circuit_stage(self, stage: str, basis: str) -> None:
         """
@@ -375,19 +363,11 @@ class HeavyHexCircuitBuilder:
                 tracker_key=lambda q: q,
                 save_layer=f'x_round_{self.step}',
             )
-            
             self.builder.measure(
                 self.flags_z,
                 basis='Z',
                 tracker_key=lambda q: q,
                 save_layer=f'z_round_{self.step}',
-            )
-
-            self.builder.measure(
-                self.true_flags,
-                basis='Z',
-                tracker_key=lambda q: q,
-                save_layer=f'f_round_{self.step}',
             )
 
             # Save keys
@@ -397,9 +377,7 @@ class HeavyHexCircuitBuilder:
             for f in self.flags_z:
                 key = gen.AtLayer(f, f'z_round_{self.step}')
                 self.recorded_measurement_keys.add(key)
-            for f in self.true_flags:
-                key = gen.AtLayer(f, f'f_round_{self.step}')
-                self.recorded_measurement_keys.add(key)
+
         else:
             raise ValueError(f"Invalid stage: {stage}. Expected 'init', 'R', or 'M'.")
     
@@ -477,8 +455,6 @@ class ConstructDetectors:
         self.tile_group_x = tile_group_x
         self.recorded_measurement_keys = recorded_measurement_keys
         self.step = step
-        _, _, self.flags = collect_qubit_sets(code_distance)
-        self.true_flags = self.flags - {f for group in tile_group_z for f in group.flags}
 
     def init_detectors(self, basis: str):
         group = self.tile_group_x if basis == 'X' else self.tile_group_z
@@ -491,21 +467,9 @@ class ConstructDetectors:
                     pos=min_pos,
                     extra_coords=[1] if basis == 'X' else [2]
                 )
-        self.flag_detectors()  # Generate flag detectors
         # Shift coordinates and tick the builder to finalize the initialization
         self.builder.shift_coords(dt=1)
         self.builder.tick()
-    
-    def flag_detectors(self):
-        """Generates detectors for the flag qubits (not participating in Z checks)."""
-
-        for flag in self.true_flags:
-            key = gen.AtLayer(flag, f'f_round_{self.step}')
-            # self.builder.detector(keys=[key], pos=flag, extra_coords=[2])
-            if key in self.recorded_measurement_keys:
-                self.builder.detector(keys=[key], pos=flag, extra_coords=[2])
-            else:
-                raise ValueError(f"flag detector not build")
 
     def end_detectors(self, table: List[complex], basis: str, org_tile_group_z: List[Tile] = []):  # should be the table in current time step
         """Generates detectors for the end of the circuit."""
@@ -517,7 +481,6 @@ class ConstructDetectors:
             self.general_z_detectors(basis, is_end=True, org_tile_group_z=org_tile_group_z)
         else:
             raise ValueError(f"Unknown basis {basis} for end detectors. Use 'X' or 'Z'.")
-        self.flag_detectors()  # Generate flag detectors
         
     def general_x_detectors(self, table: List[complex], basis: str, is_end: bool = False):  # should be the table in previous time step
         """Performs the X detectors in the circuit. The table is a list of complex numbers representing coordinates (where the real part is the row and the imaginary part is the column)
@@ -542,8 +505,8 @@ class ConstructDetectors:
             dividers = sorted(squares_by_row.get(row, []))  # squares in the same row as tiles behave as dividers
 
             # Build the divider bins (with endpoints)
-            groups: list[list[Tile]] = []
-            current_group: list[Tile] = []
+            groups = []
+            current_group = []
             divider_idx = 0
 
             for tile in tiles:
@@ -647,6 +610,7 @@ class ConstructDetectors:
             have_0   = prev_step0 <= recorded           # all flags present at step - 1
             have_1   = prev_step1 and prev_step1 <= recorded  # all flags present at step - 2 
             if not is_end:
+                
                 keys  = {gen.AtLayer(flag, f"z_round_{self.step}") for flag in flags}
                 if  have_0:
                     keys.update(prev_step0)
@@ -657,10 +621,9 @@ class ConstructDetectors:
                     warnings.warn(f"No previous step keys found for z-detectors at tail {group} at timestep {self.step} ")
                 if keys:
                     min_pos = min(flags, key=gen.complex_key)
-                    self.builder.detector(keys, pos=min_pos, extra_coords=[2])
+                self.builder.detector(keys, pos=min_pos, extra_coords=[2])
             elif is_end and basis == 'Z':
                 keys_end = {gen.AtLayer(d, 'z_round_end') for tile in group for d in tile.data}
-                data = {d for tile in group for d in tile.data}
                 if have_0:
                     keys_end.update(prev_step0)
                 elif have_1 and not have_0:
@@ -669,13 +632,12 @@ class ConstructDetectors:
                     keys_end = set()
                     warnings.warn(f"No previous step keys found for z-detectors at tail {group} at timestep {self.step} ")
                 if keys_end:
-                    min_pos = min(data, key=gen.complex_key)
+                    min_pos = min(flags, key=gen.complex_key)
                     self.builder.detector(keys_end, pos=min_pos, extra_coords=[2])
 
     def detector_generator(self , table: List,basis: str, is_end: bool = False):
         self.general_x_detectors(table, basis, is_end)
         self.general_z_detectors(basis, is_end)
-        self.flag_detectors()  # Generate flag detectors
         self.builder.shift_coords(dt=1)
         self.builder.tick()
 
@@ -689,31 +651,29 @@ def make_heavy_hex_circuit(
     all_coords = get_dataset(diameter)
     builder = gen.Builder.for_qubits(all_coords)
     table = filter_table_by_diameter(table, diameter)
-    recorded_measurements: set[str] = set()
-
+    recorded_measurements = set()
     fourbody = FourBodyTileGenerator(diameter)
-    fourbody_tiles = fourbody.generate_4body_check()
-
+    
     for step in range(rounds):
         is_end = step == rounds - 1
         twobody = TwoBodyTileGenerator(table=table[step % 2], code_distance=diameter)
-        twobody_tiles = twobody.generate_2body_checks()
-        
         circuitbuilder = HeavyHexCircuitBuilder(
             builder,
             diameter,
             step,
-            twobody_tiles,
-            fourbody_tiles,
+            twobody.generate_2body_checks(),
+            fourbody.generate_4body_check(),
             recorded_measurements,
         )
+        if step == 0:
+            circuitbuilder._collect_qubit_sets()
         circuitbuilder.generate_round_circuit(basis, is_end=is_end)
         detector = ConstructDetectors(
             builder,
             diameter,
             step,
-            twobody_tiles,
-            fourbody_tiles,
+            twobody.generate_2body_checks(),
+            fourbody.generate_4body_check(),
             recorded_measurements,
         )
         if step == 0:
@@ -724,11 +684,7 @@ def make_heavy_hex_circuit(
             elif basis == 'Z':
                 detector.detector_generator(table[(step) % 2], basis)
         if is_end:
-            detector.end_detectors(
-                table=table[step % 2],
-                basis=basis,
-                org_tile_group_z=twobody.generate_2body_checks(with_table=False),
-            )
+            detector.end_detectors(table=table[step % 2], basis=basis, org_tile_group_z=twobody.generate_2body_checks(with_table=False))
     return builder.circuit
 
 def filter_table_by_diameter(table: List[List[complex]], diameter: int) -> List[List[complex]]:
