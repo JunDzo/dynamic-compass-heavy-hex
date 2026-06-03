@@ -35,7 +35,8 @@ Generate circuits with correlated mixing noise:
 
 Author: Heavy-Hex Research Team
 """
-import heavyhex._heavy_hex as hh
+# import heavyhex._heavy_hex as hh
+import importlib
 import gen
 import argparse
 import os
@@ -70,8 +71,8 @@ Output:
     parser.add_argument("--rounds", type=str, required=True,
                         help="Number of QEC rounds (int or 'auto' for 4*diameter)")
     parser.add_argument("--noise_model", type=str, default="uniform",
-                        choices=["uniform", "corr_mixing"],
-                        help="Noise model: 'uniform' or 'corr_mixing'")
+                        choices=["uniform", "corr_mixing", "si1000"],
+                        help="Noise model: 'uniform', 'corr_mixing', or 'si1000'")
     parser.add_argument("--noise_strength", type=float, default=0.001,
                         help="Primary noise parameter (swept in threshold studies)")
     parser.add_argument("--style", type=str, default="heavy_hex",
@@ -79,6 +80,13 @@ Output:
     parser.add_argument("--b", "--basis", type=str, default="Z", dest="b",
                         choices=["X", "Z"],
                         help="Logical basis for encoding (X or Z)")
+    
+    parser.add_argument(
+    "--backend",
+    type=str,
+    required=True,
+    help="Circuit backend path under heavyhex, e.g. modified_no_hook.unflagged.no_reset"
+    )
 
     # Heavy-Hex breaker table configuration
     parser.add_argument("--table_file", type=str,
@@ -119,6 +127,10 @@ Output:
     # Ensure output directory exists
     os.makedirs(args.out_dir, exist_ok=True)
 
+    # Dynamically import the specified backend module
+    module_path = f"heavyhex.{args.backend}._heavy_hex"
+    hh = importlib.import_module(module_path)
+
     # Generate the noiseless Heavy-Hex circuit
     circuit = hh.make_heavy_hex_circuit(
         table=table,
@@ -137,6 +149,14 @@ Output:
             f"c={args.style},b={args.b},g=all.stim"
         )
 
+    elif args.noise_model == "si1000":
+        # SI1000 uniform noise: single parameter applies to all gates, but with SI1000-specific error types
+        circuit = gen.NoiseModel.si1000(args.noise_strength).noisy_circuit(circuit)
+        filename = (
+            f"{args.out_dir}/r={rounds},d={args.diameter},"
+            f"p={args.noise_strength},noise={args.noise_model},"
+            f"c={args.style},b={args.b},g=all.stim"
+        )
     elif args.noise_model == "corr_mixing":
         # Correlated mixing noise: slot-specific error rates for multi-dimensional studies
         # Validate that the three slots are distinct (required for 3D threshold studies)

@@ -11,6 +11,7 @@ requires-python = "~=3.11"
 dependencies = [
   "matplotlib ~= 3.5",
   "numpy ~= 1.22",
+  "pandas ~= 2.0",
   "scipy ~= 1.9",
   "pymatching ~= 2.1",
   "stim ~= 1.12.dev",

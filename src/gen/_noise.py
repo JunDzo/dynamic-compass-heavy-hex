@@ -194,6 +194,7 @@ class NoiseModel:
             any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': p}),
             measure_rules={
                 'Z': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=p * 5),
+                'X': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=p * 5),
                 'ZZ': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=p * 5),
             },
             gate_rules={
@@ -201,91 +202,7 @@ class NoiseModel:
             }
         )
 
-    @staticmethod
-    def heavy_hex() -> 'NoiseModel':
-        """
-        Noise model tuned to the heavy-hex device parameters (Table I).
-
-        ┌────────────────────────┬────────┐
-        │ parameter              │ value  │
-        ├────────────────────────┼────────┤
-        │ p₁Q   (1-qubit gate)   │ 0.02 % │
-        │ p₂Q   (2-qubit gate)   │ 0.41 % │
-        │ p_q.meas (quantum)     │ 1.2 %  │
-        │ p_c.meas (classical)   │ 4.2 %  │
-        │ p_idle                 │ 1.2 %  │
-        │ p_reset                │ 7.5 %  │
-        └────────────────────────┴────────┘
-
-        *   Gate errors are modelled as depolarisation **before** each Clifford gate.
-        *   Measurement errors are split:
-            - quantum part → an `X_ERROR` on the measured qubit with p_q.meas
-            - classical part → result flip probability p_c.meas
-        *   Data qubits that are idle while other qubits are being measured/reset
-            suffer depolarising noise with p_idle.
-        *   Reset is followed by an `X_ERROR` with p_reset.
-        """
-        p_1q = 0.0002      # 0.02 %
-        p_2q = 0.0041      # 0.41 %
-        p_q_meas = 0.012   # 1.2 %
-        p_c_meas = 0.042   # 4.2 %
-        p_idle = 0.012     # 1.2 %
-        
-        p_reset = 0.075    # 7.5 %
-
-        return NoiseModel(
-            # Idling depolarisation (applies during measurement / reset periods)
-            idle_depolarization=p_idle,
-
-            # Clifford‑gate noise
-            any_clifford_1q_rule=NoiseRule(after={'DEPOLARIZE1': p_1q}),
-            any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': p_2q}),
-
-            # Measurement noise (quantum part + classical result flip)
-            measure_rules={
-                'Z':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
-                'X':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
-                'Y':  NoiseRule(after={'X_ERROR': p_q_meas}, flip_result=p_c_meas),
-                'ZZ': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
-                'XX': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
-                'YY': NoiseRule(after={'DEPOLARIZE2': p_q_meas}, flip_result=p_c_meas),
-            },
-
-            # Reset noise
-            gate_rules={
-                'R':  NoiseRule(after={'X_ERROR': p_reset}),
-                'RX': NoiseRule(after={'Z_ERROR': p_reset}),
-                'RY': NoiseRule(after={'X_ERROR': p_reset}),
-            }
-        )
-    @staticmethod
-    def IBM1907(p: float) -> 'NoiseModel':
-        """Circuit-level depolarizing noise model based on arXiv:1907.09528 and flag fault tolerance assumptions.
-
-        1. Each 1-qubit gate is followed by a random Pauli {X,Y,Z} with probability p.
-        2. Each 2-qubit gate is followed by a uniform Pauli error on 2 qubits (not I⊗I) with probability p.
-        3. |0⟩ and |+⟩ state prep is faulty with probability 2p/3, flipped to |1⟩ or |−⟩ respectively.
-        4. Measurement results are flipped with probability 2p/3.
-        5. Idling qubits also suffer random Pauli {X,Y,Z} errors with probability p.
-        """
-        return NoiseModel(
-            idle_depolarization=p,
-            any_clifford_1q_rule=NoiseRule(after={'DEPOLARIZE1': p}),
-            any_clifford_2q_rule=NoiseRule(after={'DEPOLARIZE2': p}),
-            measure_rules={
-                'X': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
-                'Y': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
-                'Z': NoiseRule(after={'DEPOLARIZE1': p}, flip_result=2 * p / 3),
-                'XX': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
-                'YY': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
-                'ZZ': NoiseRule(after={'DEPOLARIZE2': p}, flip_result=2 * p / 3),
-            },
-            gate_rules={
-                'RX': NoiseRule(after={'Z_ERROR': 2 * p / 3}),
-                'RY': NoiseRule(after={'X_ERROR': 2 * p / 3}),
-                'R':  NoiseRule(after={'X_ERROR': 2 * p / 3}),
-            }
-        )
+    
     @staticmethod
     def uniform_depolarizing(p: float) -> 'NoiseModel':
         """Near-standard circuit depolarizing noise.
@@ -332,87 +249,25 @@ class NoiseModel:
         bias_slot_2_prob: float,           # direct probability for bias_slot_2 (this is your Y axis value)
     ) -> 'NoiseModel':
         """
-        Construct a noise model with:
-        1) a global baseline probability (base_prob) applied to all slots by default,
-        2) two *fixed* biased slots set to explicit probabilities (bias_slot_1_prob, bias_slot_2_prob),
-        3) one *sweep* slot whose probability (sweep_prob) is varied externally when searching for a threshold.
+        Mixed-slot noise model with one swept slot and two fixed biased slots.
 
-        D1 = 'DEPOLARIZE1'
-        D2 = 'DEPOLARIZE2'
-        M  = 'M' (measurement result flip)
-        idle = 'idle' (idling depolarization)
-        Parameters
-        ----------
-        base_prob : float
-            Probability used for every noise slot not explicitly assigned below.
-            Clamped into [0, 1].
+        All probabilities are clamped to [0, 1]. Slot selection is:
+        - `sweep_slot` -> `sweep_prob`
+        - `bias_slot_1` -> `bias_slot_1_prob`
+        - `bias_slot_2` -> `bias_slot_2_prob`
+        - otherwise -> `base_prob`
 
-        sweep_slot : str
-            Name of the noise slot that is tied to `sweep_prob`. This slot is varied
-            during threshold searches. Must be distinct from `bias_slot_1` and `bias_slot_2`.
+        The three slot names must be distinct or a `ValueError` is raised.
 
-        sweep_prob : float
-            Current probability for `sweep_slot`. In a threshold search you will call
-            this function repeatedly with different `sweep_prob` values. Clamped into [0, 1].
+        Slot aliases used by this model:
+        - `D1`: 1q depolarization (`DEPOLARIZE1`)
+        - `D2`: 2q depolarization (`DEPOLARIZE2`)
+        - `M`: measurement result flip
+        - `idle`: idling depolarization
 
-        bias_slot_1 : str
-            Name of the first biased noise slot. This is what you place on the X axis
-            when producing a 3D surface.
-
-        bias_slot_1_prob : float
-            Explicit probability for `bias_slot_1`. This value is fixed while you
-            sweep `sweep_prob`. Clamped into [0, 1].
-
-        bias_slot_2 : str
-            Name of the second biased noise slot. This is what you place on the Y axis
-            when producing a 3D surface.
-
-        bias_slot_2_prob : float
-            Explicit probability for `bias_slot_2`. This value is fixed while you
-            sweep `sweep_prob`. Clamped into [0, 1].
-
-        Returns
-        -------
-        NoiseModel
-            A model where each slot probability is determined by the selector below:
-            - if name == sweep_slot:        sweep_prob
-            - elif name == bias_slot_1:     bias_slot_1_prob
-            - elif name == bias_slot_2:     bias_slot_2_prob
-            - else:                         base_prob
-
-        Constraints
-        -----------
-        - All three slots must be distinct: {sweep_slot, bias_slot_1, bias_slot_2} must have size 3.
-        - Values are clamped into [0, 1].
-        - If two names collide, a ValueError is raised.
-
-        Measure/Reset Semantics
-        -----------------------
-        - Measurement flip probabilities are taken from sel('M').
-        - Reset uses the standard union of independent failure modes:
-            p_reset = p_measure + p_idle - p_measure * p_idle
-        where p_measure = sel('M') and p_idle = sel('idle').
-        - 1q Clifford noise uses sel('DEPOLARIZE1'), 2q Clifford uses sel('DEPOLARIZE2').
-        Adjust these keys if your backend uses different slot names.
-
-        Raises
-        ------
-        ValueError
-            If any of the three slot names are not distinct.
-
-        Examples
-        --------
-        >>> # Build a model at a single grid point (px, py) while the threshold search
-        >>> # will vary sweep_prob elsewhere:
-        >>> model = corr_mixing_direct(
-        ...     base_prob=1e-3,
-        ...     sweep_slot='D2',
-        ...     sweep_prob=sweep_prob,                 # vary this
-        ...     bias_slot_1='D1',      # X axis
-        ...     bias_slot_1_prob=0.0025,        # px
-        ...     bias_slot_2='M',                # Y axis
-        ...     bias_slot_2_prob=0.0010         # py
-        ... )
+        Reset noise combines independent measurement and idle failure:
+        `p_reset = p_measure + p_idle - p_measure * p_idle`
+        where `p_measure = sel('M')` and `p_idle = sel('idle')`.
         """
         def clamp(p: float) -> float:
             return max(0.0, min(1.0, float(p)))
@@ -450,14 +305,9 @@ class NoiseModel:
                 'X':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
                 'Y':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
                 'Z':  NoiseRule(after={'DEPOLARIZE1': sel('D1')}, flip_result=sel('M')),
-                # 'XX': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('XX')),
-                # 'YY': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('YY')),
-                # 'ZZ': NoiseRule(after={'DEPOLARIZE2': sel('DEPOLARIZE2')}, flip_result=sel('ZZ')),
             },
             gate_rules={
-                # Reset and Rx/Ry map to specific Pauli error channels in this codebase.
                 'RX': NoiseRule(after={'Z_ERROR': reset_prob()}),
-                # 'RY': NoiseRule(after={'X_ERROR': sel('X_ERROR')}),
                 'R':  NoiseRule(after={'X_ERROR': reset_prob()}),
             }
         )

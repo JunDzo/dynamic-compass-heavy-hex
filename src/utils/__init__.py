@@ -1,6 +1,6 @@
 # src/utils/__init__.py
 
-from utils.diagram_util import (
+from data.plots.circuits.circuit_plot import (
     export_svg,
     export_pdf,
     filter_detectors_and_measurements,

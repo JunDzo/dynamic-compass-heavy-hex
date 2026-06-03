@@ -4,6 +4,14 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.venv/
+.venv311/
+.venv-slurm/
+.claude/
+
+# Hidden files/folders and local app/runtime state
+.*
+!.gitignore
 
 # Data files (large, regeneratable)
 data/stats/*.csv
@@ -14,6 +22,12 @@ data/analysis/swp_sug/*.csv
 *.pdf
 *.png
 *.svg
+!figures/manuscript/**/*.pdf
+!figures/manuscript/**/*.png
+!figures/manuscript/**/*.svg
+!figures/manuscript/**/*.mp4
+!figures/manuscript/**/*.csv
+!figures/manuscript/README.md
 
 # Jupyter
 .ipynb_checkpoints
@@ -21,10 +35,6 @@ data/analysis/swp_sug/*.csv
 # IDE
 .vscode/
 .idea/
-
-# OS
-.DS_Store
-._*
 
 # Temporary files
 *.tmp

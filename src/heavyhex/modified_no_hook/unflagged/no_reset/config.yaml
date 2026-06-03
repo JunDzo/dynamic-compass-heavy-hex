@@ -1,0 +1,6 @@
+family: heavy_hex_modified
+hook_suppressed: true
+flag_detectors: false
+reset: false
+notes: >
+hook_suppressed circuit
